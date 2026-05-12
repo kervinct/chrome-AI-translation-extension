@@ -1,64 +1,136 @@
 <!DOCTYPE html>
 <html>
-  <head>
-    <meta charset="UTF-8" />
-    <title>AI 翻译助手设置</title>
-    <link rel="stylesheet" href="options.css" />
-  </head>
-  <body>
-    <div class="container">
-      <h1>AI 翻译助手设置</h1>
-      <div class="form-group">
-        <label for="apiEndpoint">API 接口地址:</label>
-        <input
-          type="text"
-          id="apiEndpoint"
-          placeholder="例如: https://api.openai.com/v1/chat/completions"
-        />
-      </div>
-      <div class="form-group">
-        <label for="apiKey">API 密钥:</label>
-        <div class="input-group">
-          <input type="password" id="apiKey" />
-          <button id="toggleApiKey" class="toggle-btn">
-            <span class="eye-icon">👁️</span>
-          </button>
-        </div>
-      </div>
-      <div class="form-group">
-        <label for="model">模型名称:</label>
-        <input type="text" id="model" placeholder="例如: gpt-3.5-turbo" />
-      </div>
 
-      <div class="form-group">
-        <label>System Prompts 设置:</label>
-        <div class="prompt-selector">
-          <select id="promptType">
-            <option value="selection">快速划词翻译</option>
-            <option value="advancedSelection">
-              高级划词翻译(别改JSON结构)
-            </option>
-            <option value="window">小窗翻译</option>
-            <option value="page">整页翻译</option>
-          </select>
-        </div>
-        <div class="prompt-editor">
-          <div class="prompt-tips">
-            <p>提示：在提示词中使用 {LANG} 来表示目标语言，例如：</p>
-            <p class="example">
-              你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。只返回翻译结果，不需要解释。
-            </p>
+<head>
+  <meta charset="UTF-8" />
+  <title>AI 翻译助手设置</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+
+<body>
+  <div class="page">
+    <header class="header">
+      <div class="header-icon">AI</div>
+      <h1>AI 翻译助手</h1>
+      <p class="subtitle">配置你的翻译服务</p>
+    </header>
+
+    <main class="main">
+      <!-- 第一行: API 连接 + 高级 API 设置 -->
+      <div class="row">
+        <section class="card">
+          <div class="card-header">
+            <span class="card-icon">🔌</span>
+            <h2>API 连接</h2>
           </div>
-          <textarea
-            id="promptContent"
-            placeholder="请输入system prompt"
-          ></textarea>
-        </div>
+          <div class="card-body">
+            <div class="field">
+              <label for="apiEndpoint">API 接口地址</label>
+              <input type="text" id="apiEndpoint" placeholder="https://api.openai.com/v1/chat/completions" />
+            </div>
+            <div class="field">
+              <label for="apiKey">API 密钥</label>
+              <div class="input-group">
+                <input type="password" id="apiKey" placeholder="sk-..." />
+                <button id="toggleApiKey" class="toggle-btn" title="切换可见性">
+                  <span class="eye-icon">👁️</span>
+                </button>
+              </div>
+            </div>
+            <div class="field">
+              <label for="model">模型名称</label>
+              <input type="text" id="model" placeholder="gpt-3.5-turbo" />
+            </div>
+          </div>
+        </section>
+
+        <section class="card">
+          <div class="card-header">
+            <span class="card-icon">⚙️</span>
+            <h2>高级 API 设置</h2>
+          </div>
+          <div class="card-body">
+            <div class="field-row">
+              <div class="field field--small">
+                <label for="temperature">Temperature</label>
+                <input type="number" id="temperature" min="0" max="2" step="0.1" value="0.3" />
+              </div>
+              <div class="field field--small">
+                <label for="maxTokens">最大输出 Tokens</label>
+                <input type="number" id="maxTokens" min="1" step="1" placeholder="默认值" />
+              </div>
+            </div>
+            <div class="field">
+              <label class="checkbox-label">
+                <input type="checkbox" id="disableThinking" checked />
+                <span>关闭思考模式（<code>enable_thinking: false</code>）</span>
+              </label>
+            </div>
+            <div class="field">
+              <label for="customParams">自定义额外参数 (JSON)</label>
+              <textarea id="customParams" rows="5" placeholder='{
+  "thinking": { "type": "disabled" },
+  "reasoning_effort": "high",
+  "top_p": 0.9
+}'></textarea>
+            </div>
+          </div>
+        </section>
       </div>
 
-      <button id="save">保存设置</button>
-      <div id="status"></div>
-    </div>
-    <script src="options.js"></script>
-  </body>
+      <!-- 第二行: System Prompts + 测试连接 -->
+      <div class="row">
+        <section class="card card--grow">
+          <div class="card-header">
+            <span class="card-icon">💬</span>
+            <h2>System Prompts</h2>
+          </div>
+          <div class="card-body">
+            <div class="field">
+              <label for="promptType">翻译场景</label>
+              <div class="select-wrapper">
+                <select id="promptType">
+                  <option value="selection">快速划词翻译</option>
+                  <option value="advancedSelection">高级划词翻译（别改 JSON 结构）</option>
+                  <option value="window">小窗翻译</option>
+                  <option value="page">整页翻译</option>
+                </select>
+              </div>
+            </div>
+            <div class="hint-box">
+              使用 <code>{LANG}</code> 表示目标语言
+            </div>
+            <div class="field">
+              <label for="promptContent">提示词内容</label>
+              <textarea id="promptContent" rows="6" placeholder="请输入 system prompt"></textarea>
+            </div>
+            <div class="save-row">
+              <button id="save" class="btn btn-primary">保存设置</button>
+              <div id="status" class="status-msg"></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="card card--test">
+          <div class="card-header">
+            <span class="card-icon">🧪</span>
+            <h2>测试连接</h2>
+          </div>
+          <div class="card-body">
+            <div class="test-source">
+              <label>测试原文 <span class="test-hint">（将翻译为中文）</span></label>
+              <textarea id="testSourceText"
+                rows="2">But a man is not made for defeat. A man can be destroyed but not defeated.</textarea>
+            </div>
+            <button id="testConnection" class="btn btn-secondary btn-block">开始测试</button>
+            <div id="testResult" class="test-result"></div>
+          </div>
+        </section>
+      </div>
+    </main>
+  </div>
+  <script src="../content/utils/default-config.js"></script>
+  <script src="options.js"></script>
+</body>
+
 </html>

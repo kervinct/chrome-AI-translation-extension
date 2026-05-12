@@ -37,16 +37,14 @@ async function saveVocabulary() {
 }
 
 // 添加单词到单词本
-async function addToVocabulary(word, definition, phonetic, partOfSpeech) {
+async function addToVocabulary(word, meanings, phonetic) {
   if (word && !vocabulary.has(word)) {
     vocabulary.add(word);
     await saveVocabulary();
 
-    // 同时保存单词的详细信息
     const wordDetails = {
       phonetic: phonetic || "",
-      definition: definition || "",
-      part_of_speech: partOfSpeech || "",
+      meanings: meanings || [],
     };
 
     const wordKey = `word_details_${word}`;
@@ -193,17 +191,16 @@ async function callAdvancedTranslationAPI(text, targetLang) {
     // 使用专门的高级划词翻译提示词
     const advancedPrompt =
       settings.prompts?.advancedSelection ||
-      `你是一个高级翻译助手。请将用户输入的文本翻译成{LANG}，并提供更多信息。
-      返回JSON格式，包含以下字段:
-      - text: 原文
-      - translation: 翻译结果
-      - complex_words: 复杂单词列表，每个单词包含word(单词)、phonetic(音标)、part_of_speech(词性)、definition(定义)字段
-      不要返回多余内容，确保返回的是有效的JSON格式。`;
+      (typeof DEFAULT_TRANSLATION_CONFIG !== "undefined"
+        ? DEFAULT_TRANSLATION_CONFIG.prompts.advancedSelection
+        : "");
 
-    // 替换提示词中的语言标记
+    if (!advancedPrompt) {
+      throw new Error("未配置高级划词翻译提示词");
+    }
+
     const prompt = advancedPrompt.replace("{LANG}", targetLang);
 
-    // 构建请求体
     const requestBody = {
       model: settings.model,
       messages: [
@@ -216,10 +213,24 @@ async function callAdvancedTranslationAPI(text, targetLang) {
           content: text,
         },
       ],
-      stream: false, // 非流式请求
+      temperature: settings.advancedSettings?.temperature ?? 0.3,
+      stream: false,
     };
 
-    // 发送请求
+    const adv = settings.advancedSettings || {};
+    if (adv.maxTokens) {
+      requestBody.max_tokens = adv.maxTokens;
+    }
+    if (adv.disableThinking !== false) {
+      requestBody.enable_thinking = false;
+    }
+    if (adv.customParams) {
+      try {
+        const extra = JSON.parse(adv.customParams);
+        Object.assign(requestBody, extra);
+      } catch (_) { }
+    }
+
     const response = await fetch(settings.apiEndpoint, {
       method: "POST",
       headers: {
@@ -237,10 +248,8 @@ async function callAdvancedTranslationAPI(text, targetLang) {
     const data = await response.json();
     console.log("高级翻译API响应:", data);
 
-    // 解析响应内容
     const content = data.choices[0].message.content;
 
-    // 提取JSON内容 (处理可能的```json包裹)
     const jsonMatch = content.match(/```json\s*([\s\S]*?)\s*```/) ||
       content.match(/```\s*([\s\S]*?)\s*```/) || [null, content];
 
@@ -250,7 +259,6 @@ async function callAdvancedTranslationAPI(text, targetLang) {
       return JSON.parse(jsonContent);
     } catch (parseError) {
       console.error("JSON解析失败，尝试清理内容后再解析", parseError);
-      // 尝试清理和修复JSON
       const cleanedJson = jsonContent
         .replace(/\\"/g, '"')
         .replace(/"{/g, "{")
@@ -266,25 +274,18 @@ async function callAdvancedTranslationAPI(text, targetLang) {
 
 // 获取API设置
 async function getAPISettings() {
+  const cfg = (typeof DEFAULT_TRANSLATION_CONFIG !== "undefined")
+    ? DEFAULT_TRANSLATION_CONFIG
+    : { prompts: {}, advancedSettings: { temperature: 0.3, maxTokens: null, disableThinking: true, customParams: "" } };
+
   return new Promise((resolve) => {
     chrome.storage.sync.get(
       {
         apiEndpoint: "",
         apiKey: "",
         model: "",
-        prompts: {
-          selection:
-            "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，只返回翻译结果，不需要解释。",
-          advancedSelection: `你是一个高级翻译助手。请将用户输入的文本翻译成{LANG}，并提供更多信息。
-            返回JSON格式，包含以下字段:
-            - text: 原文
-            - translation: 翻译结果
-            - complex_words: 复杂单词列表，每个单词包含word(单词)、phonetic(音标)、part_of_speech(词性)、definition(定义)字段
-            不要返回多余内容，确保返回的是有效的JSON格式。`,
-          window:
-            "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。只返回翻译结果，不需要解释。",
-          page: "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。翻译时要考虑上下文的连贯性。只返回翻译结果，不需要解释。",
-        },
+        prompts: cfg.prompts,
+        advancedSettings: cfg.advancedSettings,
       },
       (items) => {
         resolve(items);

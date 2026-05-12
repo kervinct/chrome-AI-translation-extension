@@ -1,43 +1,32 @@
-// *********************************/
-// 设置页面
-// 设置页面中包含API密钥、模型选择、提示词配置等功能
-// *********************************/
-
 document.addEventListener("DOMContentLoaded", () => {
   const apiEndpoint = document.getElementById("apiEndpoint");
   const apiKey = document.getElementById("apiKey");
   const model = document.getElementById("model");
+  const temperature = document.getElementById("temperature");
+  const maxTokens = document.getElementById("maxTokens");
+  const disableThinking = document.getElementById("disableThinking");
+  const customParams = document.getElementById("customParams");
   const promptType = document.getElementById("promptType");
   const promptContent = document.getElementById("promptContent");
   const saveButton = document.getElementById("save");
+  const testButton = document.getElementById("testConnection");
+  const testSourceText = document.getElementById("testSourceText");
   const status = document.getElementById("status");
+  const testResult = document.getElementById("testResult");
   const toggleApiKey = document.getElementById("toggleApiKey");
 
-  // 默认提示词
-  const defaultPrompts = {
-    selection:
-      "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，只返回翻译结果，不需要解释。",
-    advancedSelection: `你是一个高级翻译助手。请将用户输入的文本翻译成{LANG}，并提供更多信息。
-    返回JSON格式，包含以下字段:
-    - text: 原文
-    - translation: 翻译结果
-    - complex_words: 复杂单词列表，每个单词包含word(单词)、phonetic(音标)、part_of_speech(词性)、definition(定义)字段
-    不要返回多余内容，确保返回的是有效的JSON格式。`,
-    window:
-      "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。只返回翻译结果，不需要解释。",
-    page: "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。翻译时要考虑上下文的连贯性。只返回翻译结果，不需要解释。",
-  };
+  const defaultPrompts = DEFAULT_TRANSLATION_CONFIG.prompts;
+  const defaultAdvancedSettings = DEFAULT_TRANSLATION_CONFIG.advancedSettings;
 
-  // 当前提示词配置
   let prompts = { ...defaultPrompts };
 
-  // 加载保存的设置
   chrome.storage.sync.get(
     {
       apiEndpoint: "",
       apiKey: "",
       model: "",
       prompts: defaultPrompts,
+      advancedSettings: defaultAdvancedSettings,
     },
     (items) => {
       apiEndpoint.value = items.apiEndpoint;
@@ -45,18 +34,28 @@ document.addEventListener("DOMContentLoaded", () => {
       model.value = items.model;
       prompts = { ...defaultPrompts, ...items.prompts };
       promptContent.value = prompts[promptType.value];
+
+      const adv = items.advancedSettings;
+      temperature.value = adv.temperature;
+      maxTokens.value = adv.maxTokens || "";
+      disableThinking.checked = adv.disableThinking !== false;
+      customParams.value = adv.customParams || "";
     }
   );
 
-  // 切换提示词类型
   promptType.addEventListener("change", () => {
     promptContent.value =
       prompts[promptType.value] || defaultPrompts[promptType.value];
   });
 
-  // 保存设置
+  const collectAdvancedSettings = () => ({
+    temperature: parseFloat(temperature.value) || 0.3,
+    maxTokens: maxTokens.value ? parseInt(maxTokens.value, 10) : null,
+    disableThinking: disableThinking.checked,
+    customParams: customParams.value.trim(),
+  });
+
   saveButton.addEventListener("click", () => {
-    // 更新当前类型的提示词
     prompts[promptType.value] = promptContent.value;
 
     chrome.storage.sync.set(
@@ -65,6 +64,7 @@ document.addEventListener("DOMContentLoaded", () => {
         apiKey: apiKey.value,
         model: model.value,
         prompts: prompts,
+        advancedSettings: collectAdvancedSettings(),
       },
       () => {
         status.textContent = "设置已保存。";
@@ -75,7 +75,83 @@ document.addEventListener("DOMContentLoaded", () => {
     );
   });
 
-  // 切换API密钥可见性
+  testButton.addEventListener("click", async () => {
+    const endpoint = apiEndpoint.value.trim();
+    const key = apiKey.value.trim();
+    const modelName = model.value.trim();
+
+    if (!endpoint || !key || !modelName) {
+      testResult.className = "test-result error";
+      testResult.textContent = "请先填写 API 地址、密钥和模型名称。";
+      return;
+    }
+
+    testButton.disabled = true;
+    testButton.textContent = "测试中...";
+    testResult.className = "test-result";
+    testResult.textContent = "";
+
+    const adv = collectAdvancedSettings();
+
+    const sourceText = testSourceText.value.trim() || "But a man is not made for defeat. A man can be destroyed but not defeated.";
+
+    try {
+      const body = {
+        model: modelName,
+        messages: [
+          {
+            role: "user",
+            content: `请将以下文本翻译成中文：${sourceText}`,
+          },
+        ],
+        temperature: adv.temperature,
+        stream: false,
+      };
+
+      if (adv.maxTokens) {
+        body.max_tokens = adv.maxTokens;
+      }
+      if (adv.disableThinking) {
+        body.enable_thinking = false;
+      }
+      if (adv.customParams) {
+        try {
+          const extra = JSON.parse(adv.customParams);
+          Object.assign(body, extra);
+        } catch (_) { }
+      }
+
+      const res = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      if (!res.ok) {
+        const errText = await res.text().catch(() => "");
+        throw new Error(`HTTP ${res.status}${errText ? ": " + errText.slice(0, 200) : ""}`);
+      }
+
+      const data = await res.json();
+      const content =
+        data.choices?.[0]?.message?.content ||
+        data.choices?.[0]?.text ||
+        "(无法解析响应内容)";
+
+      testResult.className = "test-result success";
+      testResult.textContent = `✓ 连接成功\n"${sourceText}" → ${content}`;
+    } catch (err) {
+      testResult.className = "test-result error";
+      testResult.textContent = `连接失败：${err.message}`;
+    } finally {
+      testButton.disabled = false;
+      testButton.textContent = "测试连接";
+    }
+  });
+
   toggleApiKey.addEventListener("click", () => {
     const type = apiKey.type;
     apiKey.type = type === "password" ? "text" : "password";

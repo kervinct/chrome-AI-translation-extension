@@ -40,19 +40,18 @@ class TranslationService {
 
   // 获取API设置
   async _getAPISettings() {
+    const cfg = (typeof DEFAULT_TRANSLATION_CONFIG !== "undefined")
+      ? DEFAULT_TRANSLATION_CONFIG
+      : { prompts: {}, advancedSettings: { temperature: 0.3, maxTokens: null, disableThinking: true, customParams: "" } };
+
     return new Promise((resolve) => {
       chrome.storage.sync.get(
         {
           apiEndpoint: "",
           apiKey: "",
           model: "",
-          prompts: {
-            selection:
-              "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，只返回翻译结果，不需要解释。",
-            window:
-              "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。只返回翻译结果，不需要解释。",
-            page: "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。翻译时要考虑上下文的连贯性。只返回翻译结果，不需要解释。",
-          },
+          prompts: cfg.prompts,
+          advancedSettings: cfg.advancedSettings,
         },
         (items) => {
           resolve(items);
@@ -249,27 +248,43 @@ class TranslationService {
     }
 
     // 构建请求选项
+    const body = {
+      model: settings.model,
+      messages: [
+        {
+          role: "system",
+          content: prompt.replace("{LANG}", targetLang),
+        },
+        {
+          role: "user",
+          content: text,
+        },
+      ],
+      temperature: settings.advancedSettings?.temperature ?? 0.3,
+      stream: true,
+    };
+
+    const adv = settings.advancedSettings || {};
+    if (adv.maxTokens) {
+      body.max_tokens = adv.maxTokens;
+    }
+    if (adv.disableThinking !== false) {
+      body.enable_thinking = false;
+    }
+    if (adv.customParams) {
+      try {
+        const extra = JSON.parse(adv.customParams);
+        Object.assign(body, extra);
+      } catch (_) { }
+    }
+
     const requestOptions = {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${settings.apiKey}`,
       },
-      body: JSON.stringify({
-        model: settings.model,
-        messages: [
-          {
-            role: "system",
-            content: prompt.replace("{LANG}", targetLang),
-          },
-          {
-            role: "user",
-            content: text,
-          },
-        ],
-        temperature: 0.3,
-        stream: true,
-      }),
+      body: JSON.stringify(body),
     };
 
     // 如果提供了signal，添加到请求选项中
@@ -357,7 +372,7 @@ class TranslationService {
       }
     } finally {
       try {
-        reader.cancel().catch(() => {});
+        reader.cancel().catch(() => { });
       } catch (error) {
         // 忽略取消读取器时的错误
       }

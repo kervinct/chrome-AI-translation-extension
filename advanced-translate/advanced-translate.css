@@ -11,8 +11,8 @@
   --text-color: #333;
   --border-color: #dee2e6;
   --shadow-color: rgba(0, 0, 0, 0.1);
-  --font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, sans-serif;
+  --font-family:
+    system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
 * {
@@ -34,6 +34,7 @@ body {
   display: flex;
   flex-direction: column;
   background-color: white;
+  min-width: 680px;
 }
 
 /* 头部 */
@@ -83,14 +84,15 @@ h1 {
 
 /* 翻译部分 */
 .translation-section {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 20px;
+  display: flex;
+  gap: 16px;
   margin-bottom: 20px;
 }
 
 .original-text-container,
 .translated-text-container {
+  flex: 1;
+  min-width: 0;
   background-color: var(--light-color);
   border-radius: 8px;
   padding: 15px;
@@ -155,6 +157,12 @@ h1 {
   margin-bottom: 8px;
 }
 
+.word-title {
+  display: flex;
+  align-items: baseline;
+  gap: 0;
+}
+
 .word-text {
   font-weight: 600;
   font-size: 16px;
@@ -187,27 +195,54 @@ h1 {
   cursor: default;
 }
 
-.word-details {
+.word-meanings {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 10px;
 }
 
-.word-pos {
+.meaning-block {
+  padding-left: 4px;
+}
+
+.meaning-block .word-pos {
   display: inline-block;
   background-color: var(--light-color);
   color: var(--secondary-color);
-  padding: 2px 6px;
+  padding: 2px 8px;
   border-radius: 4px;
   font-size: 12px;
   font-style: italic;
-  margin-right: 8px;
+  margin-bottom: 4px;
+}
+
+.definitions-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 8px;
+}
+
+.definition-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 
 .word-definition {
   font-size: 14px;
   line-height: 1.5;
   color: var(--text-color);
+}
+
+.word-example {
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--secondary-color);
+  font-style: italic;
+  padding-left: 12px;
+  border-left: 2px solid var(--border-color);
+  margin-top: 2px;
 }
 
 /* 加载部分 */

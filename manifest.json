@@ -1,15 +1,9 @@
 {
   "manifest_version": 3,
   "name": "AI 极简翻译助手",
-  "version": "1.0.20250714",
+  "version": "1.0.20260511",
   "description": "使用在线服务大模型的 API 进行智能网页翻译",
-  "permissions": [
-    "storage",
-    "activeTab",
-    "scripting",
-    "contextMenus",
-    "tabs"
-  ],
+  "permissions": ["storage", "activeTab", "scripting", "contextMenus", "tabs"],
   "action": {
     "default_icon": {
       "16": "icons/icon.png",
@@ -23,10 +17,9 @@
   },
   "content_scripts": [
     {
-      "matches": [
-        "<all_urls>"
-      ],
+      "matches": ["<all_urls>"],
       "js": [
+        "content/utils/default-config.js",
         "content/content.js",
         "content/page-translator.js",
         "content/selection-translator.js",
@@ -36,9 +29,7 @@
         "content/utils/dom-processor.js",
         "content/utils/translation-service.js"
       ],
-      "css": [
-        "content/content.css"
-      ]
+      "css": ["content/content.css"]
     }
   ],
   "web_accessible_resources": [
@@ -61,12 +52,9 @@
         "advanced-translate/advanced-translate.css",
         "advanced-translate/advanced-translate.js"
       ],
-      "matches": [
-        "<all_urls>"
-      ]
+      "matches": ["<all_urls>"]
     }
   ],
-  "host_permissions": [
-    "https://api.siliconflow.cn/*"
-  ]
+  "host_permissions": ["https://api.siliconflow.cn/*"],
+  "optional_host_permissions": ["*://*/*"]
 }

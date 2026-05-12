@@ -1,21 +1,16 @@
 // *********************************/
 // 单词本JavaScript
-// 单词本相关操作
 // *********************************/
 
-// 单词本页面
 document.addEventListener("DOMContentLoaded", () => {
-  // DOM元素
   const vocabularyList = document.getElementById("vocabularyList");
   const emptyMessage = document.getElementById("emptyMessage");
   const wordCount = document.getElementById("wordCount");
   const searchInput = document.getElementById("searchInput");
   const clearAllBtn = document.getElementById("clearAll");
 
-  // 词汇列表数据
   let vocabularyData = [];
 
-  // 加载词汇数据
   const loadVocabulary = async () => {
     try {
       const result = await chrome.storage.local.get({ vocabulary: [] });
@@ -30,12 +25,32 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
-  // 渲染词汇列表
+  // 兼容旧格式 { phonetic, definition, part_of_speech } 转为新格式 { phonetic, meanings }
+  const normalizeDetails = (details) => {
+    if (details.meanings && Array.isArray(details.meanings)) {
+      return details;
+    }
+    const meanings = [];
+    if (details.part_of_speech || details.definition) {
+      meanings.push({
+        part_of_speech: details.part_of_speech || "",
+        definitions: [
+          {
+            definition: details.definition || "",
+            example: "",
+          },
+        ],
+      });
+    }
+    return {
+      phonetic: details.phonetic || "",
+      meanings,
+    };
+  };
+
   const renderVocabularyList = (words) => {
-    // 清空列表
     vocabularyList.innerHTML = "";
 
-    // 显示或隐藏空消息
     if (words.length === 0) {
       emptyMessage.style.display = "block";
       return;
@@ -43,13 +58,11 @@ document.addEventListener("DOMContentLoaded", () => {
       emptyMessage.style.display = "none";
     }
 
-    // 创建单词卡片
     words.forEach((word) => {
       const wordCard = document.createElement("div");
       wordCard.className = "word-card";
       wordCard.dataset.word = word;
 
-      // 构建单词卡片内容
       wordCard.innerHTML = `
         <div class="word-header">
           <div class="word-title">
@@ -68,12 +81,9 @@ document.addEventListener("DOMContentLoaded", () => {
       `;
 
       vocabularyList.appendChild(wordCard);
-
-      // 加载单词详细信息
       loadWordDetails(word);
     });
 
-    // 绑定删除按钮事件
     document.querySelectorAll(".delete-word").forEach((btn) => {
       btn.addEventListener("click", (e) => {
         const word = e.currentTarget.dataset.word;
@@ -82,10 +92,8 @@ document.addEventListener("DOMContentLoaded", () => {
     });
   };
 
-  // 加载单词详细信息
   const loadWordDetails = async (word) => {
     try {
-      // 首先尝试从存储中获取详细信息
       const wordKey = `word_details_${word}`;
       const result = await chrome.storage.local.get({ [wordKey]: null });
 
@@ -93,11 +101,9 @@ document.addEventListener("DOMContentLoaded", () => {
       const phoneticElement = document.getElementById(`phonetic-${word}`);
 
       if (result[wordKey]) {
-        // 如果有缓存的详细信息，使用缓存数据
-        const details = result[wordKey];
+        const details = normalizeDetails(result[wordKey]);
         renderWordDetails(infoContainer, phoneticElement, details);
       } else {
-        // 否则显示基本信息
         infoContainer.innerHTML = `
           <div class="word-definition">暂无详细释义</div>
         `;
@@ -109,41 +115,54 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
-  // 渲染单词详细信息
   const renderWordDetails = (container, phoneticEl, details) => {
     if (details.phonetic) {
       phoneticEl.textContent = details.phonetic;
     }
 
-    let html = "";
-
-    if (details.part_of_speech) {
-      html += `<span class="word-pos">${details.part_of_speech}</span>`;
+    if (!details.meanings || details.meanings.length === 0) {
+      container.innerHTML = '<div class="word-definition">暂无详细释义</div>';
+      return;
     }
 
-    if (details.definition) {
-      html += `<div class="word-definition">${details.definition}</div>`;
-    }
+    let html = '<div class="word-meanings">';
 
-    container.innerHTML =
-      html || '<div class="word-definition">暂无详细释义</div>';
+    details.meanings.forEach((meaning) => {
+      html += '<div class="meaning-block">';
+
+      if (meaning.part_of_speech) {
+        html += `<span class="word-pos">${meaning.part_of_speech}</span>`;
+      }
+
+      if (meaning.definitions && meaning.definitions.length > 0) {
+        html += '<div class="definitions-list">';
+        meaning.definitions.forEach((def) => {
+          html += '<div class="definition-item">';
+          html += `<div class="word-definition">${def.definition || ""}</div>`;
+          if (def.example) {
+            html += `<div class="word-example">${def.example}</div>`;
+          }
+          html += "</div>";
+        });
+        html += "</div>";
+      }
+
+      html += "</div>";
+    });
+
+    html += "</div>";
+    container.innerHTML = html;
   };
 
-  // 从单词本中移除单词
   const removeWordFromVocabulary = async (word) => {
     try {
-      // 从数据中移除
       vocabularyData = vocabularyData.filter((w) => w !== word);
 
-      // 更新存储
       await chrome.storage.local.set({ vocabulary: vocabularyData });
 
-      // 同时删除单词详细信息缓存
       const wordKey = `word_details_${word}`;
       await chrome.storage.local.remove(wordKey);
-      console.log(`已从缓存中移除单词 "${word}" 的详细信息`);
 
-      // 重新渲染列表
       renderVocabularyList(vocabularyData);
       updateWordCount();
 
@@ -154,12 +173,10 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
-  // 更新单词计数
   const updateWordCount = () => {
     wordCount.textContent = vocabularyData.length;
   };
 
-  // 清空单词本
   const clearVocabulary = async () => {
     if (vocabularyData.length === 0) {
       showToast("单词本已经是空的");
@@ -168,24 +185,18 @@ document.addEventListener("DOMContentLoaded", () => {
 
     if (confirm("确定要清空单词本吗？此操作不可撤销。")) {
       try {
-        // 获取所有单词的详细信息键
         const wordDetailsKeys = vocabularyData.map(
           (word) => `word_details_${word}`
         );
 
-        // 清空数据
         vocabularyData = [];
 
-        // 更新存储 - 清除单词列表
         await chrome.storage.local.set({ vocabulary: [] });
 
-        // 清除所有单词详细信息
         if (wordDetailsKeys.length > 0) {
           await chrome.storage.local.remove(wordDetailsKeys);
-          console.log(`已清除 ${wordDetailsKeys.length} 个单词的详细信息缓存`);
         }
 
-        // 重新渲染列表
         renderVocabularyList(vocabularyData);
         updateWordCount();
 
@@ -197,7 +208,6 @@ document.addEventListener("DOMContentLoaded", () => {
     }
   };
 
-  // 搜索单词
   const searchVocabulary = (query) => {
     if (!query) {
       renderVocabularyList(vocabularyData);
@@ -212,7 +222,6 @@ document.addEventListener("DOMContentLoaded", () => {
     renderVocabularyList(filtered);
   };
 
-  // 显示错误消息
   const showError = (message) => {
     const errorElement = document.createElement("div");
     errorElement.className = "error-message";
@@ -222,22 +231,17 @@ document.addEventListener("DOMContentLoaded", () => {
     vocabularyList.appendChild(errorElement);
   };
 
-  // 显示toast消息
   const showToast = (message) => {
-    // 创建toast元素
     const toast = document.createElement("div");
     toast.className = "toast";
     toast.textContent = message;
 
-    // 添加到页面
     document.body.appendChild(toast);
 
-    // 添加显示类
     setTimeout(() => {
       toast.classList.add("show");
     }, 10);
 
-    // 3秒后移除
     setTimeout(() => {
       toast.classList.remove("show");
       setTimeout(() => {
@@ -246,17 +250,14 @@ document.addEventListener("DOMContentLoaded", () => {
     }, 3000);
   };
 
-  // 绑定事件
   clearAllBtn.addEventListener("click", clearVocabulary);
 
   searchInput.addEventListener("input", (e) => {
     searchVocabulary(e.target.value.trim());
   });
 
-  // 初始加载
   loadVocabulary();
 
-  // 添加CSS
   const style = document.createElement("style");
   style.textContent = `
     .toast {
@@ -272,12 +273,12 @@ document.addEventListener("DOMContentLoaded", () => {
       opacity: 0;
       transition: transform 0.3s, opacity 0.3s;
     }
-    
+
     .toast.show {
       transform: translateX(-50%) translateY(0);
       opacity: 1;
     }
-    
+
     .error-message {
       background-color: #ffebee;
       color: #d32f2f;
@@ -286,15 +287,63 @@ document.addEventListener("DOMContentLoaded", () => {
       margin: 20px 0;
       text-align: center;
     }
-    
+
     .word-loading, .word-error {
       color: #888;
       font-style: italic;
       font-size: 14px;
     }
-    
+
     .word-error {
       color: #d32f2f;
+    }
+
+    .word-meanings {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .meaning-block {
+      padding-left: 4px;
+    }
+
+    .meaning-block .word-pos {
+      display: inline-block;
+      background-color: var(--light-gray);
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #666;
+      margin-bottom: 4px;
+    }
+
+    .definitions-list {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      padding-left: 8px;
+    }
+
+    .definition-item {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .definition-item .word-definition {
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .word-example {
+      font-size: 13px;
+      line-height: 1.4;
+      color: #666;
+      font-style: italic;
+      padding-left: 12px;
+      border-left: 2px solid var(--border-color);
+      margin-top: 2px;
     }
   `;
   document.head.appendChild(style);
