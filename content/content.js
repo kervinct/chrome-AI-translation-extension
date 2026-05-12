@@ -95,11 +95,18 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true; // 表示将异步发送响应
   } else if (request.action === "openVocabulary") {
-    // 打开单词本
     chrome.runtime.sendMessage({
       action: "openVocabularyPage",
     });
     sendResponse({});
+  } else if (request.action === "retryFailed") {
+    retryFailedTranslations().then((result) => {
+      sendResponse(result);
+    });
+    return true;
+  } else if (request.action === "getFailedCount") {
+    const failed = translationService.getFailedTasks();
+    sendResponse({ count: failed.length });
   }
 });
 
@@ -123,9 +130,27 @@ observer.observe(document.documentElement, {
   subtree: true,
 });
 
+const retryFailedTranslations = async () => {
+  const failedTasks = translationService.getFailedTasks();
+  if (failedTasks.length === 0) {
+    return { success: true, retried: 0 };
+  }
+
+  const targetLang = await getCurrentTargetLang();
+  const paragraphs = failedTasks.map(t => t.paragraph);
+  translationService.failedTasks = [];
+
+  const success = await translationService.streamingPageTranslate(
+    paragraphs,
+    translationService.currentType,
+    targetLang
+  );
+
+  return { success, retried: paragraphs.length };
+};
+
 // 检测中文简繁体
-const detectChineseVariant = (text) => {
-  // 简单判断：如果含有繁体特有字符，则可能是繁体中文
+const detectChineseVariant = (text) => {  // 简单判断：如果含有繁体特有字符，则可能是繁体中文
   const traditionalChars = "魚機車個島後會長東買來紙風無紅電開關時實關";
   const simplifiedChars = "鱼机车个岛后会长东买来纸风无红电开关时实关";
 

@@ -24,12 +24,14 @@ var DEFAULT_TRANSLATION_CONFIG = {
 不要返回多余内容，确保返回的是有效的JSON格式。`,
     window:
       "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。只返回翻译结果，不需要解释。",
-    page: "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。翻译时要考虑上下文的连贯性。只返回翻译结果，不需要解释。",
+    page: "你是一个翻译助手。请将用户输入的文本翻译成{LANG}，保持原文的格式和风格。翻译时要考虑上下文的连贯性。文本中可能包含 <code>...</code>、<kbd>...</kbd> 等HTML标签，它们代表代码片段或技术术语，翻译时必须原样保留这些标签及其内部内容，只翻译标签外的普通文本。只返回翻译结果，不需要解释。",
   },
   advancedSettings: {
     temperature: 0.3,
     maxTokens: null,
     disableThinking: true,
     customParams: "",
+    rpm: 10,
+    maxConcurrent: 5,
   },
 };

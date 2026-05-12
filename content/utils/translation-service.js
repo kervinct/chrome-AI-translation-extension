@@ -1,26 +1,30 @@
-// 翻译服务工具类
 class TranslationService {
   constructor() {
-    this.activeTasks = new Map(); // 存储活跃的翻译任务
-    this.maxConcurrent = 10; // 最大并发数
-    this.progress = { total: 0, completed: 0 }; // 翻译进度
-    this.shouldStop = false; // 停止标志
-    this.currentType = ""; // 当前翻译类型
-    this.taskQueue = []; // 任务队列
-    this.runningTasks = new Set(); // 正在运行的任务集合
-    this.currentParagraphMap = new Map(); // 添加段落映射存储
+    this.activeTasks = new Map();
+    this.maxConcurrent = 5;
+    this.progress = { total: 0, completed: 0, succeeded: 0, failed: 0, cached: 0 };
+    this.shouldStop = false;
+    this.currentType = "";
+    this.taskQueue = [];
+    this.runningTasks = new Set();
+    this.currentParagraphMap = new Map();
+    this.failedTasks = [];
+
+    this._requestTimestamps = [];
+    this._rpm = 10;
+    this._rpmReady = false;
   }
 
-  // 重置状态
   _reset() {
     this.activeTasks.clear();
-    this.progress = { total: 0, completed: 0 };
+    this.progress = { total: 0, completed: 0, succeeded: 0, failed: 0, cached: 0 };
     this.shouldStop = false;
     this.taskQueue = [];
     this.runningTasks.clear();
-    this.currentParagraphMap = new Map(); // 添加段落映射存储
+    this.currentParagraphMap = new Map();
+    this.failedTasks = [];
+    this._requestTimestamps = [];
 
-    // 清除所有翻译标记
     document
       .querySelectorAll('[data-is-translated="true"]')
       .forEach((element) => {
@@ -30,7 +34,6 @@ class TranslationService {
         element.removeAttribute("data-is-translated");
       });
 
-    // 移除所有翻译容器
     document
       .querySelectorAll(".ai-translation-container")
       .forEach((container) => {
@@ -38,11 +41,10 @@ class TranslationService {
       });
   }
 
-  // 获取API设置
   async _getAPISettings() {
     const cfg = (typeof DEFAULT_TRANSLATION_CONFIG !== "undefined")
       ? DEFAULT_TRANSLATION_CONFIG
-      : { prompts: {}, advancedSettings: { temperature: 0.3, maxTokens: null, disableThinking: true, customParams: "" } };
+      : { prompts: {}, advancedSettings: { temperature: 0.3, maxTokens: null, disableThinking: true, customParams: "", rpm: 10, maxConcurrent: 5 } };
 
     return new Promise((resolve) => {
       chrome.storage.sync.get(
@@ -60,16 +62,38 @@ class TranslationService {
     });
   }
 
-  // 过滤并去重段落
+  async _ensureRpmConfig() {
+    if (this._rpmReady) return;
+    const settings = await this._getAPISettings();
+    const adv = settings.advancedSettings || {};
+    this._rpm = adv.rpm || 10;
+    this.maxConcurrent = adv.maxConcurrent || 5;
+    this._rpmReady = true;
+  }
+
+  async _waitForRateLimit() {
+    const now = Date.now();
+    const windowMs = 60000;
+    this._requestTimestamps = this._requestTimestamps.filter(ts => now - ts < windowMs);
+
+    if (this._requestTimestamps.length >= this._rpm) {
+      const oldestInWindow = this._requestTimestamps[0];
+      const waitMs = windowMs - (now - oldestInWindow) + 100;
+      if (waitMs > 0) {
+        console.log(`速率限制: 等待 ${Math.ceil(waitMs / 1000)}s...`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+      }
+    }
+
+    this._requestTimestamps.push(Date.now());
+  }
+
   _filterAndDeduplicateParagraphs(paragraphs) {
     const seen = new Set();
     const uniqueParagraphs = [];
 
     paragraphs.forEach((paragraph) => {
-      // 生成段落的唯一标识
       const key = this._generateParagraphKey(paragraph);
-
-      // 如果这个段落还没有处理过，添加到结果中
       if (!seen.has(key)) {
         seen.add(key);
         uniqueParagraphs.push(paragraph);
@@ -79,32 +103,21 @@ class TranslationService {
     return uniqueParagraphs;
   }
 
-  // 生成段落的唯一标识
   _generateParagraphKey(paragraph) {
-    if (!paragraph || !paragraph.nodes || paragraph.nodes.length === 0) {
+    if (!paragraph || !paragraph.originalText) {
       return "";
     }
 
-    return paragraph.nodes
-      .map((node) => {
-        if (node.nodeType === Node.TEXT_NODE) {
-          return `text:${node.textContent.trim()}`;
-        } else if (node.nodeType === Node.ELEMENT_NODE) {
-          return `${node.tagName}:${node.textContent.trim()}`;
-        }
-        return "";
-      })
-      .join("|");
+    return `block:${paragraph.originalText}`;
   }
 
-  // 启动单个翻译任务
   async _startTranslationTask(task) {
     if (this.shouldStop) return;
 
     this.runningTasks.add(task.id);
 
+    let success = false;
     try {
-      // 检查缓存
       const url = window.location.href;
       const cachedTranslation = await CacheManager.getCache(
         url,
@@ -116,18 +129,25 @@ class TranslationService {
       if (cachedTranslation) {
         task.paragraph.translatedText = cachedTranslation.translation;
         this._applyTranslation(task.paragraph);
-        this._updateProgress();
+        this.progress.cached++;
+        success = true;
         this.runningTasks.delete(task.id);
+        this._updateProgress(success);
         this._startNextTask();
         return;
       }
 
-      // 创建AbortController
+      await this._waitForRateLimit();
+
+      if (this.shouldStop) {
+        this.runningTasks.delete(task.id);
+        return;
+      }
+
       const controller = new AbortController();
       const signal = controller.signal;
       this.activeTasks.set(task.id, controller);
 
-      // 使用通用的API调用方法
       const response = await this._callTranslationAPI(
         task.paragraph.originalText,
         task.targetLang,
@@ -135,11 +155,9 @@ class TranslationService {
         signal
       );
 
-      // 处理流式响应
       const translatedText = await this._handleStreamingResponse(
         response,
         (partialText) => {
-          // 实时更新翻译结果的回调
           if (!this.shouldStop) {
             task.paragraph.translatedText = partialText;
             this._applyTranslation(task.paragraph);
@@ -147,7 +165,6 @@ class TranslationService {
         }
       );
 
-      // 流式响应完全结束后，才保存到缓存
       if (!this.shouldStop && translatedText.trim()) {
         await CacheManager.setCache(
           url,
@@ -156,25 +173,28 @@ class TranslationService {
           task.targetLang,
           this.currentType
         );
+        success = true;
       }
     } catch (error) {
       if (error.name === "AbortError") {
-        console.log("翻译请求被取消，这是正常现象");
+        console.log("翻译请求被取消");
       } else {
-        console.log("流式翻译错误:", error);
+        console.error("流式翻译错误:", error.message);
+        this.failedTasks.push({
+          id: task.id,
+          paragraph: task.paragraph,
+          targetLang: task.targetLang,
+          error: error.message,
+        });
       }
     } finally {
-      // 清理任务状态
       this.activeTasks.delete(task.id);
       this.runningTasks.delete(task.id);
-      this._updateProgress();
-
-      // 启动下一个任务
+      this._updateProgress(success);
       this._startNextTask();
     }
   }
 
-  // 启动下一个任务
   _startNextTask() {
     if (this.shouldStop) return;
 
@@ -189,7 +209,6 @@ class TranslationService {
     }
   }
 
-  // 应用翻译结果
   _applyTranslation(paragraph) {
     if (this.currentType === "compare") {
       domProcessor.applyCompareTranslation(paragraph);
@@ -198,84 +217,70 @@ class TranslationService {
     }
   }
 
-  // 更新进度
-  _updateProgress() {
-    this.progress.completed += 1;
+  _updateProgress(success) {
+    this.progress.completed++;
+    if (success) this.progress.succeeded++;
+
+    const failedCount = this.progress.completed - this.progress.succeeded;
     const percent = Math.min(
       Math.floor((this.progress.completed / this.progress.total) * 100),
       100
     );
 
-    console.log(
-      `翻译进度: ${this.progress.completed}/${this.progress.total} (${percent}%) [缓存命中: ${this.progress.cached}]`
-    );
+    const statusText = failedCount > 0
+      ? `${this.progress.completed}/${this.progress.total} (${percent}%) 成功:${this.progress.succeeded} 失败:${failedCount}`
+      : `${this.progress.completed}/${this.progress.total} (${percent}%)`;
 
-    // 发送进度更新消息
+    console.log(`翻译进度: ${statusText} [缓存:${this.progress.cached}]`);
+
     chrome.runtime.sendMessage({
       action: "updateProgressBar",
       progress: percent,
+      succeeded: this.progress.succeeded,
+      failed: failedCount,
+      total: this.progress.total,
     });
 
-    // 如果翻译已完成（全部或已停止），发送翻译完成消息
     if (this.progress.completed >= this.progress.total || this.shouldStop) {
+      const finalFailed = this.progress.completed - this.progress.succeeded;
       chrome.runtime.sendMessage({
         action: "translationComplete",
+        succeeded: this.progress.succeeded,
+        failed: finalFailed,
+        total: this.progress.total,
+        hasFailed: finalFailed > 0,
       });
     }
   }
 
-  // ================================
-  // 新增通用方法，用于API调用和流式响应处理
-  // ================================
-
-  // 通用API调用方法
-  async _callTranslationAPI(
-    text,
-    targetLang,
-    type = "selection",
-    signal = null
-  ) {
-    // 获取API设置
+  async _callTranslationAPI(text, targetLang, type = "selection", signal = null) {
     const settings = await this._getAPISettings();
     if (!settings.apiEndpoint || !settings.apiKey || !settings.model) {
       throw new Error("请先在设置页面配置API信息");
     }
 
-    // 获取对应类型的prompt
     const prompt = settings.prompts?.[type] || settings.prompts?.selection;
     if (!prompt) {
       throw new Error("未配置翻译提示词");
     }
 
-    // 构建请求选项
     const body = {
       model: settings.model,
       messages: [
-        {
-          role: "system",
-          content: prompt.replace("{LANG}", targetLang),
-        },
-        {
-          role: "user",
-          content: text,
-        },
+        { role: "system", content: prompt.replace("{LANG}", targetLang) },
+        { role: "user", content: text },
       ],
       temperature: settings.advancedSettings?.temperature ?? 0.3,
       stream: true,
     };
 
     const adv = settings.advancedSettings || {};
-    if (adv.maxTokens) {
-      body.max_tokens = adv.maxTokens;
-    }
-    if (adv.disableThinking !== false) {
-      body.enable_thinking = false;
-    }
+    if (adv.maxTokens) body.max_tokens = adv.maxTokens;
+    if (adv.disableThinking !== false) body.enable_thinking = false;
     if (adv.customParams) {
       try {
-        const extra = JSON.parse(adv.customParams);
-        Object.assign(body, extra);
-      } catch (_) { }
+        Object.assign(body, JSON.parse(adv.customParams));
+      } catch (_) {}
     }
 
     const requestOptions = {
@@ -287,22 +292,17 @@ class TranslationService {
       body: JSON.stringify(body),
     };
 
-    // 如果提供了signal，添加到请求选项中
-    if (signal) {
-      requestOptions.signal = signal;
-    }
+    if (signal) requestOptions.signal = signal;
 
-    // 发起API请求
     const response = await fetch(settings.apiEndpoint, requestOptions);
 
     if (!response.ok) {
-      throw new Error(`翻译请求失败: ${response.status}`);
+      throw new Error(`HTTP ${response.status}`);
     }
 
     return response;
   }
 
-  // 通用流式响应处理方法
   async _handleStreamingResponse(response, onPartialContent = null) {
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
@@ -312,11 +312,7 @@ class TranslationService {
     try {
       while (!isDone) {
         if (this.shouldStop) {
-          try {
-            await reader.cancel();
-          } catch (error) {
-            console.log("取消读取流时出现错误，这是正常现象");
-          }
+          try { await reader.cancel(); } catch (_) {}
           break;
         }
 
@@ -324,130 +320,88 @@ class TranslationService {
         try {
           readResult = await reader.read();
         } catch (error) {
-          if (error.name === "AbortError") {
-            console.log("读取被中止，这是正常现象");
-            break;
-          }
+          if (error.name === "AbortError") break;
           throw error;
         }
 
         const { done, value } = readResult;
-        if (done) {
-          isDone = true;
-          break;
-        }
+        if (done) { isDone = true; break; }
 
         const chunk = decoder.decode(value, { stream: true });
         const lines = chunk.split("\n");
 
         for (const line of lines) {
           if (!line.trim() || line.includes("[DONE]")) continue;
-
           if (line.startsWith("data: ")) {
             try {
               const jsonStr = line.slice(6).trim();
               if (!jsonStr || jsonStr === "[DONE]") continue;
-
               const json = JSON.parse(jsonStr);
               if (json.choices?.[0]?.delta?.content) {
-                const content = json.choices[0].delta.content;
-                translatedText += content;
-
-                // 如果提供了回调函数，调用它
+                translatedText += json.choices[0].delta.content;
                 if (typeof onPartialContent === "function") {
                   onPartialContent(translatedText);
                 }
               }
             } catch (e) {
-              console.log("解析流式响应出错:", e, line);
+              console.log("解析流式响应出错:", e);
             }
           }
         }
       }
     } catch (error) {
-      if (error.name === "AbortError") {
-        console.log("翻译请求被取消，这是正常现象");
-      } else {
+      if (error.name !== "AbortError") {
         console.log("处理流式响应出错:", error);
       }
     } finally {
-      try {
-        reader.cancel().catch(() => { });
-      } catch (error) {
-        // 忽略取消读取器时的错误
-      }
+      try { reader.cancel().catch(() => {}); } catch (_) {}
     }
 
     return translatedText;
   }
 
-  // ================================
-  // 上面都是私有方法，这几个外部有用到
-  // ================================
-
-  // 停止所有翻译任务
   stopAllTranslations() {
     this.shouldStop = true;
-    // 中止所有活跃的请求
     for (const controller of this.activeTasks.values()) {
       if (controller && controller.abort) {
-        try {
-          controller.abort();
-        } catch (error) {
-          // 忽略AbortError，这是预期的行为
-          if (error.name !== "AbortError") {
-            console.log("取消请求时出现错误:", error);
-          }
-        }
+        try { controller.abort(); } catch (_) {}
       }
     }
     this.activeTasks.clear();
     this.taskQueue = [];
     this.runningTasks.clear();
-    this.progress = { total: 0, completed: 0 }; // 重置进度
   }
 
-  // 整页流式翻译(整页翻译使用，一次性多个翻译任务)
   async streamingPageTranslate(paragraphs, type, targetLang) {
-    // 在开始新的翻译任务前，先恢复原文
     domProcessor.restoreOriginalWebPage();
-
-    // 重置状态
     this._reset();
+    this._rpmReady = false;
     this.currentType = type;
 
-    // 过滤并去重段落
+    await this._ensureRpmConfig();
+
     const uniqueParagraphs = this._filterAndDeduplicateParagraphs(paragraphs);
 
-    // 初始化进度
     this.progress = {
       total: uniqueParagraphs.length,
       completed: 0,
+      succeeded: 0,
+      failed: 0,
       cached: 0,
     };
 
-    // 检查缓存命中情况
     const url = window.location.href;
     const cacheChecks = await Promise.all(
       uniqueParagraphs.map(async (paragraph) => {
-        const cache = await CacheManager.getCache(
-          url,
-          paragraph.originalText,
-          targetLang,
-          this.currentType
-        );
+        const cache = await CacheManager.getCache(url, paragraph.originalText, targetLang, this.currentType);
         return { paragraph, cache };
       })
     );
 
-    // 分离缓存命中和未命中的段落
     const { cachedParagraphs, uncachedParagraphs } = cacheChecks.reduce(
       (acc, { paragraph, cache }) => {
         if (cache) {
-          acc.cachedParagraphs.push({
-            ...paragraph,
-            translatedText: cache.translation,
-          });
+          acc.cachedParagraphs.push({ ...paragraph, translatedText: cache.translation });
         } else {
           acc.uncachedParagraphs.push(paragraph);
         }
@@ -456,117 +410,64 @@ class TranslationService {
       { cachedParagraphs: [], uncachedParagraphs: [] }
     );
 
-    // 更新缓存命中的进度
     this.progress.cached = cachedParagraphs.length;
     this.progress.completed = cachedParagraphs.length;
+    this.progress.succeeded = cachedParagraphs.length;
 
-    // 应用缓存的翻译
     for (const paragraph of cachedParagraphs) {
       this._applyTranslation(paragraph);
     }
 
-    // 更新进度条
     if (this.progress.cached > 0) {
-      const percent = Math.floor(
-        (this.progress.completed / this.progress.total) * 100
-      );
-      chrome.runtime.sendMessage({
-        action: "updateProgressBar",
-        progress: percent,
-      });
+      const percent = Math.floor((this.progress.completed / this.progress.total) * 100);
+      chrome.runtime.sendMessage({ action: "updateProgressBar", progress: percent, succeeded: this.progress.succeeded, failed: 0, total: this.progress.total });
     }
 
-    // 准备未缓存的任务队列
     this.taskQueue = uncachedParagraphs.map((paragraph, index) => ({
       id: `task_${index}`,
       paragraph,
       targetLang,
     }));
 
-    // 如果所有段落都已缓存，直接返回
     if (this.taskQueue.length === 0) {
-      console.log(
-        `翻译任务全部完成！(${this.progress.completed}/${this.progress.total})`
-      );
-      chrome.runtime.sendMessage({
-        action: "updateProgressBar",
-        progress: 100,
-      });
-      chrome.runtime.sendMessage({
-        action: "translationComplete",
-      });
+      chrome.runtime.sendMessage({ action: "updateProgressBar", progress: 100, succeeded: this.progress.succeeded, failed: 0, total: this.progress.total });
+      chrome.runtime.sendMessage({ action: "translationComplete", succeeded: this.progress.succeeded, failed: 0, total: this.progress.total, hasFailed: false });
       return true;
     }
 
-    // 启动初始的并发任务
     const initialTasks = this.taskQueue.splice(0, this.maxConcurrent);
-    await Promise.all(
-      initialTasks.map((task) => this._startTranslationTask(task))
-    );
+    await Promise.all(initialTasks.map((task) => this._startTranslationTask(task)));
 
-    // 等待所有任务完成
     while (this.taskQueue.length > 0 || this.runningTasks.size > 0) {
       if (this.shouldStop) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
 
-    // 确保最终进度正确
     if (!this.shouldStop) {
-      // 确保进度显示为100%
-      chrome.runtime.sendMessage({
-        action: "updateProgressBar",
-        progress: 100,
-      });
-
-      // 通知翻译完成
-      chrome.runtime.sendMessage({
-        action: "translationComplete",
-      });
-
-      console.log(
-        `翻译任务全部完成！(${this.progress.completed}/${this.progress.total})`
-      );
+      const finalFailed = this.progress.completed - this.progress.succeeded;
+      const finalPercent = this.progress.total > 0 ? Math.floor((this.progress.completed / this.progress.total) * 100) : 100;
+      chrome.runtime.sendMessage({ action: "updateProgressBar", progress: finalPercent, succeeded: this.progress.succeeded, failed: finalFailed, total: this.progress.total });
+      chrome.runtime.sendMessage({ action: "translationComplete", succeeded: this.progress.succeeded, failed: finalFailed, total: this.progress.total, hasFailed: finalFailed > 0 });
     } else {
       console.log("翻译任务被用户中止");
     }
 
-    return this.progress.completed === this.progress.total;
+    return this.progress.succeeded === this.progress.total;
   }
 
-  // 调用API进行翻译(单个翻译任务，划词翻译和小窗翻译)
-  // type: selection, window
-  async streamingSingleTranslate(
-    text,
-    targetLang,
-    type = "selection",
-    signal = null
-  ) {
-    try {
-      // 使用通用的API调用方法
-      return await this._callTranslationAPI(text, targetLang, type, signal);
-    } catch (error) {
-      console.error("API调用失败:", error);
-      throw error;
-    }
+  getFailedTasks() {
+    return this.failedTasks;
   }
 
-  // 处理单个翻译的流式响应（供外部使用）
+  async streamingSingleTranslate(text, targetLang, type = "selection", signal = null) {
+    return await this._callTranslationAPI(text, targetLang, type, signal);
+  }
+
   async handleSingleTranslationResponse(response, onUpdate, onComplete) {
-    try {
-      const translatedText = await this._handleStreamingResponse(
-        response,
-        onUpdate
-      );
-      if (typeof onComplete === "function") {
-        onComplete(translatedText);
-      }
-      return translatedText;
-    } catch (error) {
-      console.error("处理翻译响应失败:", error);
-      throw error;
-    }
+    const translatedText = await this._handleStreamingResponse(response, onUpdate);
+    if (typeof onComplete === "function") onComplete(translatedText);
+    return translatedText;
   }
 }
 
-// 导出翻译服务实例
 const translationService = new TranslationService();

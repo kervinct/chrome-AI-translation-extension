@@ -6,6 +6,8 @@ document.addEventListener("DOMContentLoaded", () => {
   const maxTokens = document.getElementById("maxTokens");
   const disableThinking = document.getElementById("disableThinking");
   const customParams = document.getElementById("customParams");
+  const rpm = document.getElementById("rpm");
+  const maxConcurrent = document.getElementById("maxConcurrent");
   const promptType = document.getElementById("promptType");
   const promptContent = document.getElementById("promptContent");
   const saveButton = document.getElementById("save");
@@ -40,6 +42,8 @@ document.addEventListener("DOMContentLoaded", () => {
       maxTokens.value = adv.maxTokens || "";
       disableThinking.checked = adv.disableThinking !== false;
       customParams.value = adv.customParams || "";
+      rpm.value = adv.rpm || 10;
+      maxConcurrent.value = adv.maxConcurrent || 5;
     }
   );
 
@@ -53,6 +57,8 @@ document.addEventListener("DOMContentLoaded", () => {
     maxTokens: maxTokens.value ? parseInt(maxTokens.value, 10) : null,
     disableThinking: disableThinking.checked,
     customParams: customParams.value.trim(),
+    rpm: parseInt(rpm.value, 10) || 10,
+    maxConcurrent: parseInt(maxConcurrent.value, 10) || 5,
   });
 
   saveButton.addEventListener("click", () => {

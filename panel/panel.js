@@ -27,6 +27,9 @@ document.addEventListener("DOMContentLoaded", async () => {
   const clearReplaceCache = document.getElementById("clearReplaceCache");
   const progressBar = document.querySelector(".progress");
   const progressText = document.querySelector(".progress-text");
+  const failInfo = document.getElementById("failInfo");
+  const failText = document.getElementById("failText");
+  const retryBtn = document.getElementById("retryFailed");
 
   // 显示进度条并初始化
   progressBar.style.display = "block";
@@ -215,18 +218,22 @@ document.addEventListener("DOMContentLoaded", async () => {
         });
       }
     } else if (request.action === "updateProgressBar") {
-      // 确保进度条是可见的
       progressBar.parentElement.style.display = "block";
       progressBar.style.display = "block";
       progressText.style.display = "block";
 
-      // 更新进度条
       const progress = Math.min(request.progress, 100);
-      console.log(`面板收到进度更新: ${progress}%`); // 添加调试日志
+      console.log(`面板收到进度更新: ${progress}%`);
       progressBar.style.width = `${progress}%`;
-      progressText.textContent = `${progress}%`;
 
-      // 如果翻译完成，更新按钮状态
+      if (request.failed > 0) {
+        progressText.textContent = `${progress}% (成功 ${request.succeeded}/${request.total}，失败 ${request.failed})`;
+        progressBar.style.backgroundColor = request.failed > request.succeeded ? "#f44336" : "#ff9800";
+      } else {
+        progressText.textContent = `${progress}%`;
+        progressBar.style.backgroundColor = "#4a8af4";
+      }
+
       if (progress >= 100) {
         if (streamTranslateButton.textContent.trim() === "停止翻译") {
           streamTranslateButton.textContent = "显示原文";
@@ -241,7 +248,7 @@ document.addEventListener("DOMContentLoaded", async () => {
         enableAllButtons();
       }
     } else if (request.action === "showStopButton") {
-      // 改变当前活动翻译按钮为停止状态
+      failInfo.style.display = "none";
       if (streamTranslateButton.disabled === false) {
         streamTranslateButton.textContent = "停止翻译";
         streamTranslateButton.classList.add("stop-translate");
@@ -274,7 +281,6 @@ document.addEventListener("DOMContentLoaded", async () => {
       }
     } else if (request.action === "translationComplete") {
       console.log("收到翻译完成消息");
-      // 更新翻译按钮状态
       if (streamTranslateButton.textContent.trim() === "停止翻译") {
         streamTranslateButton.textContent = "显示原文";
         streamTranslateButton.classList.remove("stop-translate");
@@ -286,16 +292,26 @@ document.addEventListener("DOMContentLoaded", async () => {
         streamReplaceButton.classList.add("restore-button");
       }
 
-      // 确保进度显示为100%
+      const finalPercent = request.total > 0 ? Math.floor((request.succeeded / request.total) * 100) : 100;
       progressBar.style.width = "100%";
-      progressText.textContent = "100%";
 
-      // 启用所有按钮
+      if (request.hasFailed) {
+        failText.textContent = `${request.succeeded}/${request.total} 成功，${request.failed} 项失败`;
+        failInfo.style.display = "flex";
+        progressBar.style.backgroundColor = request.failed >= request.succeeded ? "#f44336" : "#ff9800";
+        progressText.textContent = `完成 (成功 ${request.succeeded}/${request.total})`;
+      } else {
+        failInfo.style.display = "none";
+        progressBar.style.backgroundColor = "#4a8af4";
+        progressText.textContent = "100%";
+      }
+
       enableAllButtons();
     } else if (request.action === "restorationComplete") {
-      // 重置进度条
+      failInfo.style.display = "none";
       progressBar.style.width = "0%";
       progressText.textContent = "0%";
+      progressBar.style.backgroundColor = "#4a8af4";
     }
   });
 
@@ -502,6 +518,21 @@ document.addEventListener("DOMContentLoaded", async () => {
       messageElement.remove();
     }, 3000);
   };
+
+  // 重试失败项
+  retryBtn.addEventListener("click", () => {
+    failInfo.style.display = "none";
+    progressBar.style.width = "0%";
+    progressText.textContent = "0%";
+    progressBar.style.backgroundColor = "#4a8af4";
+    disableButtons();
+
+    chrome.tabs.sendMessage(currentTabId, { action: "retryFailed" }, (response) => {
+      if (!response || response.retried === 0) {
+        enableAllButtons();
+      }
+    });
+  });
 
   // 检查缓存状态更新按钮状态
   const updateCacheButtons = () => {

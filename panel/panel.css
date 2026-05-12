@@ -317,3 +317,36 @@ button.stop-translate:hover {
     opacity: 0;
   }
 }
+
+.fail-info {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 10px;
+  margin-top: 4px;
+  background: #fff3e0;
+  border: 1px solid #ffcc80;
+  border-radius: 4px;
+}
+
+.fail-text {
+  font-size: 12px;
+  color: #e65100;
+}
+
+.retry-btn {
+  padding: 3px 10px;
+  font-size: 12px;
+  font-family: inherit;
+  background: #ff9800;
+  color: white;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.retry-btn:hover {
+  background: #f57c00;
+}
