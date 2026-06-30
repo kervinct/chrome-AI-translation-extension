@@ -12,6 +12,40 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   }
 });
 
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "llm-stream") return;
+  let controller = new AbortController();
+
+  port.onMessage.addListener(async (msg) => {
+    try {
+      const response = await fetch(msg.url, {
+        ...msg.options,
+        signal: controller.signal,
+      });
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder("utf-8");
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) {
+          port.postMessage({ status: "end" });
+          break;
+        }
+        // 直接把这批次拿到的原始 SSE 文本块发给前端
+        const textChunk = decoder.decode(value, { stream: true });
+        port.postMessage({ status: "chunk", data: textChunk });
+      }
+    } catch (err) {
+      port.postMessage({ status: "error", error: err.message });
+    }
+  });
+
+  port.onDisconnect.addListener(() => {
+    controller.abort();
+  });
+});
+
 // 打开单词本页面
 const openVocabularyPage = async () => {
   if (!vocabularyWindow) {
@@ -65,7 +99,7 @@ chrome.tabs.onRemoved.addListener((tabId) => {
 // 面板切换函数
 function togglePanel(tabId, isVisible) {
   let panel = document.querySelector(
-    `.translator-panel[data-tab-id="${tabId}"]`
+    `.translator-panel[data-tab-id="${tabId}"]`,
   );
 
   if (panel) {
@@ -143,7 +177,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       request.originalText,
       request.translationResult,
       request.errorMessage,
-      request.isLoading
+      request.isLoading,
     );
     sendResponse({});
     return false;
@@ -155,14 +189,14 @@ const createAdvancedTranslateWindow = async (
   originalText,
   translationResult,
   errorMessage,
-  isLoading = false
+  isLoading = false,
 ) => {
   try {
     if (!advancedTranslateWindow) {
       // 创建新窗口
       const window = await chrome.windows.create({
         url: chrome.runtime.getURL(
-          "advanced-translate/advanced-translate.html"
+          "advanced-translate/advanced-translate.html",
         ),
         type: "popup",
         width: 780,

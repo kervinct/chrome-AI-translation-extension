@@ -2,7 +2,13 @@ class TranslationService {
   constructor() {
     this.activeTasks = new Map();
     this.maxConcurrent = 5;
-    this.progress = { total: 0, completed: 0, succeeded: 0, failed: 0, cached: 0 };
+    this.progress = {
+      total: 0,
+      completed: 0,
+      succeeded: 0,
+      failed: 0,
+      cached: 0,
+    };
     this.shouldStop = false;
     this.currentType = "";
     this.taskQueue = [];
@@ -17,7 +23,13 @@ class TranslationService {
 
   _reset() {
     this.activeTasks.clear();
-    this.progress = { total: 0, completed: 0, succeeded: 0, failed: 0, cached: 0 };
+    this.progress = {
+      total: 0,
+      completed: 0,
+      succeeded: 0,
+      failed: 0,
+      cached: 0,
+    };
     this.shouldStop = false;
     this.taskQueue = [];
     this.runningTasks.clear();
@@ -42,9 +54,20 @@ class TranslationService {
   }
 
   async _getAPISettings() {
-    const cfg = (typeof DEFAULT_TRANSLATION_CONFIG !== "undefined")
-      ? DEFAULT_TRANSLATION_CONFIG
-      : { prompts: {}, advancedSettings: { temperature: 0.3, maxTokens: null, disableThinking: true, customParams: "", rpm: 10, maxConcurrent: 5 } };
+    const cfg =
+      typeof DEFAULT_TRANSLATION_CONFIG !== "undefined"
+        ? DEFAULT_TRANSLATION_CONFIG
+        : {
+            prompts: {},
+            advancedSettings: {
+              temperature: 0.3,
+              maxTokens: null,
+              disableThinking: true,
+              customParams: "",
+              rpm: 10,
+              maxConcurrent: 5,
+            },
+          };
 
     return new Promise((resolve) => {
       chrome.storage.sync.get(
@@ -57,7 +80,7 @@ class TranslationService {
         },
         (items) => {
           resolve(items);
-        }
+        },
       );
     });
   }
@@ -74,14 +97,16 @@ class TranslationService {
   async _waitForRateLimit() {
     const now = Date.now();
     const windowMs = 60000;
-    this._requestTimestamps = this._requestTimestamps.filter(ts => now - ts < windowMs);
+    this._requestTimestamps = this._requestTimestamps.filter(
+      (ts) => now - ts < windowMs,
+    );
 
     if (this._requestTimestamps.length >= this._rpm) {
       const oldestInWindow = this._requestTimestamps[0];
       const waitMs = windowMs - (now - oldestInWindow) + 100;
       if (waitMs > 0) {
         console.log(`速率限制: 等待 ${Math.ceil(waitMs / 1000)}s...`);
-        await new Promise(resolve => setTimeout(resolve, waitMs));
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
       }
     }
 
@@ -123,7 +148,7 @@ class TranslationService {
         url,
         task.paragraph.originalText,
         task.targetLang,
-        this.currentType
+        this.currentType,
       );
 
       if (cachedTranslation) {
@@ -152,7 +177,7 @@ class TranslationService {
         task.paragraph.originalText,
         task.targetLang,
         "page",
-        signal
+        signal,
       );
 
       const translatedText = await this._handleStreamingResponse(
@@ -162,7 +187,7 @@ class TranslationService {
             task.paragraph.translatedText = partialText;
             this._applyTranslation(task.paragraph);
           }
-        }
+        },
       );
 
       if (!this.shouldStop && translatedText.trim()) {
@@ -171,7 +196,7 @@ class TranslationService {
           task.paragraph.originalText,
           translatedText.trim(),
           task.targetLang,
-          this.currentType
+          this.currentType,
         );
         success = true;
       }
@@ -224,12 +249,13 @@ class TranslationService {
     const failedCount = this.progress.completed - this.progress.succeeded;
     const percent = Math.min(
       Math.floor((this.progress.completed / this.progress.total) * 100),
-      100
+      100,
     );
 
-    const statusText = failedCount > 0
-      ? `${this.progress.completed}/${this.progress.total} (${percent}%) 成功:${this.progress.succeeded} 失败:${failedCount}`
-      : `${this.progress.completed}/${this.progress.total} (${percent}%)`;
+    const statusText =
+      failedCount > 0
+        ? `${this.progress.completed}/${this.progress.total} (${percent}%) 成功:${this.progress.succeeded} 失败:${failedCount}`
+        : `${this.progress.completed}/${this.progress.total} (${percent}%)`;
 
     console.log(`翻译进度: ${statusText} [缓存:${this.progress.cached}]`);
 
@@ -253,7 +279,12 @@ class TranslationService {
     }
   }
 
-  async _callTranslationAPI(text, targetLang, type = "selection", signal = null) {
+  async _callTranslationAPI(
+    text,
+    targetLang,
+    type = "selection",
+    signal = null,
+  ) {
     const settings = await this._getAPISettings();
     if (!settings.apiEndpoint || !settings.apiKey || !settings.model) {
       throw new Error("请先在设置页面配置API信息");
@@ -294,7 +325,64 @@ class TranslationService {
 
     if (signal) requestOptions.signal = signal;
 
-    const response = await fetch(settings.apiEndpoint, requestOptions);
+    function bgStreamFetch(url, options) {
+      // 1. 过滤掉无法序列化的 signal
+      const sanitizedOptions = { ...options };
+      if (sanitizedOptions.signal) delete sanitizedOptions.signal;
+
+      // 2. 创建一个标准的 Web ReadableStream
+      const stream = new ReadableStream({
+        start(controller) {
+          // 在流启动时，建立插件长连接
+          const port = chrome.runtime.connect({ name: "llm-stream" });
+
+          port.postMessage({ url, options: sanitizedOptions });
+
+          // 监听后台发回的 chunk，并塞入 Stream 的队列中
+          port.onMessage.addListener((msg) => {
+            if (msg.status === "chunk") {
+              // 必须把字符串编码为 Uint8Array 字节流，因为原生 fetch 的 stream 是字节流
+              const encoder = new TextEncoder();
+              controller.enqueue(encoder.encode(msg.data));
+            } else if (msg.status === "end") {
+              controller.close(); // 正常结束流
+              port.disconnect();
+            } else if (msg.status === "error") {
+              controller.error(new Error(msg.error));
+              port.disconnect();
+            }
+          });
+
+          // 如果外部取消了流读取（例如调用了 reader.cancel()），同步断开端口
+          port.onDisconnect.addListener(() => {
+            try {
+              controller.close();
+            } catch (e) {}
+          });
+        },
+      });
+
+      // 3. 完美伪造一个原生 fetch 的 Response 对象
+      return {
+        ok: true,
+        status: 200,
+        body: stream, // 这里就是原生的 ReadableStream！
+        // 如果原代码里用了 response.text() 或 json()，也可以顺便伪造：
+        json: async () => {
+          const reader = stream.getReader();
+          let result = "";
+          const decoder = new TextDecoder();
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            result += decoder.decode(value);
+          }
+          return JSON.parse(result);
+        },
+      };
+    }
+
+    const response = await bgStreamFetch(settings.apiEndpoint, requestOptions);
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
@@ -312,7 +400,9 @@ class TranslationService {
     try {
       while (!isDone) {
         if (this.shouldStop) {
-          try { await reader.cancel(); } catch (_) {}
+          try {
+            await reader.cancel();
+          } catch (_) {}
           break;
         }
 
@@ -325,7 +415,10 @@ class TranslationService {
         }
 
         const { done, value } = readResult;
-        if (done) { isDone = true; break; }
+        if (done) {
+          isDone = true;
+          break;
+        }
 
         const chunk = decoder.decode(value, { stream: true });
         const lines = chunk.split("\n");
@@ -354,7 +447,9 @@ class TranslationService {
         console.log("处理流式响应出错:", error);
       }
     } finally {
-      try { reader.cancel().catch(() => {}); } catch (_) {}
+      try {
+        reader.cancel().catch(() => {});
+      } catch (_) {}
     }
 
     return translatedText;
@@ -364,7 +459,9 @@ class TranslationService {
     this.shouldStop = true;
     for (const controller of this.activeTasks.values()) {
       if (controller && controller.abort) {
-        try { controller.abort(); } catch (_) {}
+        try {
+          controller.abort();
+        } catch (_) {}
       }
     }
     this.activeTasks.clear();
@@ -393,21 +490,29 @@ class TranslationService {
     const url = window.location.href;
     const cacheChecks = await Promise.all(
       uniqueParagraphs.map(async (paragraph) => {
-        const cache = await CacheManager.getCache(url, paragraph.originalText, targetLang, this.currentType);
+        const cache = await CacheManager.getCache(
+          url,
+          paragraph.originalText,
+          targetLang,
+          this.currentType,
+        );
         return { paragraph, cache };
-      })
+      }),
     );
 
     const { cachedParagraphs, uncachedParagraphs } = cacheChecks.reduce(
       (acc, { paragraph, cache }) => {
         if (cache) {
-          acc.cachedParagraphs.push({ ...paragraph, translatedText: cache.translation });
+          acc.cachedParagraphs.push({
+            ...paragraph,
+            translatedText: cache.translation,
+          });
         } else {
           acc.uncachedParagraphs.push(paragraph);
         }
         return acc;
       },
-      { cachedParagraphs: [], uncachedParagraphs: [] }
+      { cachedParagraphs: [], uncachedParagraphs: [] },
     );
 
     this.progress.cached = cachedParagraphs.length;
@@ -419,8 +524,16 @@ class TranslationService {
     }
 
     if (this.progress.cached > 0) {
-      const percent = Math.floor((this.progress.completed / this.progress.total) * 100);
-      chrome.runtime.sendMessage({ action: "updateProgressBar", progress: percent, succeeded: this.progress.succeeded, failed: 0, total: this.progress.total });
+      const percent = Math.floor(
+        (this.progress.completed / this.progress.total) * 100,
+      );
+      chrome.runtime.sendMessage({
+        action: "updateProgressBar",
+        progress: percent,
+        succeeded: this.progress.succeeded,
+        failed: 0,
+        total: this.progress.total,
+      });
     }
 
     this.taskQueue = uncachedParagraphs.map((paragraph, index) => ({
@@ -430,13 +543,27 @@ class TranslationService {
     }));
 
     if (this.taskQueue.length === 0) {
-      chrome.runtime.sendMessage({ action: "updateProgressBar", progress: 100, succeeded: this.progress.succeeded, failed: 0, total: this.progress.total });
-      chrome.runtime.sendMessage({ action: "translationComplete", succeeded: this.progress.succeeded, failed: 0, total: this.progress.total, hasFailed: false });
+      chrome.runtime.sendMessage({
+        action: "updateProgressBar",
+        progress: 100,
+        succeeded: this.progress.succeeded,
+        failed: 0,
+        total: this.progress.total,
+      });
+      chrome.runtime.sendMessage({
+        action: "translationComplete",
+        succeeded: this.progress.succeeded,
+        failed: 0,
+        total: this.progress.total,
+        hasFailed: false,
+      });
       return true;
     }
 
     const initialTasks = this.taskQueue.splice(0, this.maxConcurrent);
-    await Promise.all(initialTasks.map((task) => this._startTranslationTask(task)));
+    await Promise.all(
+      initialTasks.map((task) => this._startTranslationTask(task)),
+    );
 
     while (this.taskQueue.length > 0 || this.runningTasks.size > 0) {
       if (this.shouldStop) break;
@@ -445,9 +572,24 @@ class TranslationService {
 
     if (!this.shouldStop) {
       const finalFailed = this.progress.completed - this.progress.succeeded;
-      const finalPercent = this.progress.total > 0 ? Math.floor((this.progress.completed / this.progress.total) * 100) : 100;
-      chrome.runtime.sendMessage({ action: "updateProgressBar", progress: finalPercent, succeeded: this.progress.succeeded, failed: finalFailed, total: this.progress.total });
-      chrome.runtime.sendMessage({ action: "translationComplete", succeeded: this.progress.succeeded, failed: finalFailed, total: this.progress.total, hasFailed: finalFailed > 0 });
+      const finalPercent =
+        this.progress.total > 0
+          ? Math.floor((this.progress.completed / this.progress.total) * 100)
+          : 100;
+      chrome.runtime.sendMessage({
+        action: "updateProgressBar",
+        progress: finalPercent,
+        succeeded: this.progress.succeeded,
+        failed: finalFailed,
+        total: this.progress.total,
+      });
+      chrome.runtime.sendMessage({
+        action: "translationComplete",
+        succeeded: this.progress.succeeded,
+        failed: finalFailed,
+        total: this.progress.total,
+        hasFailed: finalFailed > 0,
+      });
     } else {
       console.log("翻译任务被用户中止");
     }
@@ -459,12 +601,20 @@ class TranslationService {
     return this.failedTasks;
   }
 
-  async streamingSingleTranslate(text, targetLang, type = "selection", signal = null) {
+  async streamingSingleTranslate(
+    text,
+    targetLang,
+    type = "selection",
+    signal = null,
+  ) {
     return await this._callTranslationAPI(text, targetLang, type, signal);
   }
 
   async handleSingleTranslationResponse(response, onUpdate, onComplete) {
-    const translatedText = await this._handleStreamingResponse(response, onUpdate);
+    const translatedText = await this._handleStreamingResponse(
+      response,
+      onUpdate,
+    );
     if (typeof onComplete === "function") onComplete(translatedText);
     return translatedText;
   }
